@@ -1,0 +1,144 @@
+---
+title: "EEA - TP1"
+author: "Lisandro Carrasco"
+date: "2022-10-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(GGally)
+library(corrr)
+library(kableExtra)
+library(broom)
+library(tidymodels)
+
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+## Datos
+
+```{r data}
+train <- read.csv('encuesta_salud_train.csv', encoding = 'UTF-8')
+test <- read.csv('encuesta_salud_test.csv', encoding = 'UTF-8')
+
+test <- test %>% 
+  mutate_if(is.character, as.factor) %>% 
+  mutate(record = as.factor(record))
+
+train <- train %>% 
+  mutate_if(is.character, as.factor) %>% 
+  mutate(record = as.factor(record))
+```
+
+## Análisis exploratorio
+
+¿Cómo es la correlación entre las variables numéricas? Utilice y analice en detalle algún gráfico que sirva para sacar conclusiones sobre la asociación de variables realizando apertura por género.
+
+```{r numericas}
+numericas <- train %>% 
+  select_if(is.numeric) %>% 
+  colnames()
+
+numericas <- train %>% 
+  select(genero, numericas)
+
+```
+
+```{r ggpairs, message = FALSE}
+numericas%>% 
+  mutate(genero = as.factor(genero)) %>% 
+  ggpairs(., mapping = aes(colour = genero), title = "Matriz de correlaciones",
+          upper = list(continuous = wrap("cor", size = 3, hjust=0.5)), legend = 25) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45, vjust=0.5), legend.position = "bottom")
+
+```
+En particular, ¿cómo es la correlación entre la variable a explicar (peso) y el resto de las variables numéricas?
+ 
+
+```{r corrleacion del peso}
+train %>% 
+  select(peso, edad, altura, dias_consumo_comida_rapida, consumo_diario_alcohol,
+         dias_actividad_fisica_semanal) %>% 
+  correlate() %>% 
+  shave() %>% 
+  fashion()
+```
+
+```{r corplot}
+train %>% 
+  select(peso, edad, altura, dias_consumo_comida_rapida, consumo_diario_alcohol,
+         dias_actividad_fisica_semanal) %>% 
+ correlate() %>% 
+  rplot()
+```
+
+
+Para las categorías de la variable frecuencia de hambre mensual, analice gráficamente la distribución en
+términos de frecuencia relativa de:
+a) El consumo semanal de verdura.
+b) El consumo semanal de comida grasa.
+¿Cuáles son las principales características que observa en estos gráficos?
+
+
+Acá hay que cambiar el nombre de los valores para ordenarlos. Pasarlos a número. 
+
+```{r relacion del hambre}
+hambre <- train %>% 
+  select(frecuencia_hambre_mensual, consumo_semanal_verdura, consumo_semanal_comida_grasa)
+
+ggplot(hambre, aes(frecuencia_hambre_mensual, consumo_semanal_verdura, 
+                   group = frecuencia_hambre_mensual, fill = factor(frecuencia_hambre_mensual))) +
+  geom_boxplot(alpha = 0.75)
+```
+```{r}
+cor.test(hambre$frecuencia_hambre_mensual, hambre$consumo_semanal_verdura, method = "spearman")
+```
+
+```{r}
+cor.test(hambre$frecuencia_hambre_mensual, hambre$consumo_semanal_comida_grasa, method = "spearman")
+```
+
+## Modelo inicial
+
+Se plantea que una primera alternativa para modelar el peso es:
+
+E(peso) = β0 +β1altura+β2edad+β3genero+β4diasActividadF isicaSemanal+β5consumoDiarioAlcohol
+
+¿Cuál es la interpretación de cada uno de los coeficientes estimados? ¿Son significativos? ¿El modelo resulta
+significativo para explicar el peso? ¿Qué porcentaje de la variabilidad explica el modelo?
+
+```{r modelo inicial}
+modelo_inicial <- lm(peso ~ altura + edad + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+                     data = train)
+tidy(modelo_inicial)
+```
+
+```{r significatividad individual}
+tidy_inicial <- tidy(modelo_inicial, conf.int = TRUE)
+
+tidy_inicial %>%
+  select(term, statistic, p.value, conf.low, conf.high) 
+```
+
+```{r significatividad global}
+broom::glance(modelo_inicial)
+```
+
+## Modelo categóricas
+
+```{r modelo categoricas}
+modelo_cat <- lm(peso ~ altura + edad + genero + consumo_semanal_snacks + (genero*edad),
+                 data = train)
+tidy(modelo_cat, conf.int = TRUE)
+```
+```{r}
+tidy(anova(modelo_cat))
+```
+
+
