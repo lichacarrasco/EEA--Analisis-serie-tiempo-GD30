@@ -1,26 +1,33 @@
 ---
-title: "EEA - TP1"
+title: "EEA - TP1: Regresión lineal"
 author: "Lisandro Carrasco"
-date: "2022-10-13"
+date: "2022-10-16"
 output: html_document
+editor_options: 
+  markdown: 
+    wrap: sentence
 ---
 
 ```{r setup, include=FALSE}
-library(dplyr)
-library(tidyr)
-library(stringr)
-library(lubridate)
+library(tidyverse)
+library(purrr)
 library(ggplot2)
+library(viridis)
+library(cowplot)
 library(GGally)
 library(corrr)
 library(kableExtra)
+library(reactable)
 library(broom)
 library(tidymodels)
 
-knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+options(scipen = 999)
 ```
 
-## Datos
+## Análisis exploratorio
+
+**Leer el archivo "encuesta_salud_train.csv". ¿Qué puede mencionar sobre su estructura y variables?**
 
 ```{r data}
 train <- read.csv('encuesta_salud_train.csv', encoding = 'UTF-8')
@@ -33,11 +40,35 @@ test <- test %>%
 train <- train %>% 
   mutate_if(is.character, as.factor) %>% 
   mutate(record = as.factor(record))
+
+glimpse(train)
 ```
 
-## Análisis exploratorio
+```{r valores unicos}
+exploracion <- train %>%
+  gather(.,
+         key = "variables",
+         value = "valores") %>% 
+  group_by(variables) %>% 
+  summarise(valores_unicos = n_distinct(valores))
+reactable(exploracion %>% select(
+  "Variables" = variables,
+  "Valores únicos" = valores_unicos
+))
 
-¿Cómo es la correlación entre las variables numéricas? Utilice y analice en detalle algún gráfico que sirva para sacar conclusiones sobre la asociación de variables realizando apertura por género.
+```
+
+El dataframe de entrenamiento cuenta con 7.024 observaciones y 16 variables, 6 de las cuales son numéricas y el resto, categóricas.
+Más allá de que haya variables que se presentan como numéricas, muchas de ellas tienen un comportamiento discreto (puede apreciarse en la poca cantidad de valores únicos que tienen), como la edad, el consumo diario de alcohol, de comida rápida y la frecuencia semanal de actividad física.
+Por otro lado, las variables que brindan información sobre consumos semanales se tratarán como factores expresados en caracteres.
+Finalmente, el dataframe no presenta valores faltantes en ninguna de sus columnas.
+
+```{r faltantes}
+any(is.na(train))
+rm(exploracion)
+```
+
+**¿Cómo es la correlación entre las variables numéricas? Utilice y analice en detalle algún gráfico que sirva para sacar conclusiones sobre la asociación de variables realizando apertura por género.**
 
 ```{r numericas}
 numericas <- train %>% 
@@ -58,87 +89,764 @@ numericas%>%
   theme(axis.text.x = element_text(angle=45, vjust=0.5), legend.position = "bottom")
 
 ```
-En particular, ¿cómo es la correlación entre la variable a explicar (peso) y el resto de las variables numéricas?
- 
+
+Algunas apreciaciones generales sobre el gráfico:
+
+-   Aperturando por género, pueden verse comportamientos esperables, por ejemplo, que la mediana de la altura y el peso sea mayor en los hombres que en las mujeres.
+
+-   Por otro lado, hay datos llamativos, como el hecho de que si bien comparten la mediana del consumo diario de alcohol, en las mujeres el tercer cuartil se extiende bastante más.
+
+-   También puede verse un mayor nivel de actividad física entre los hombres que entre las mujeres.
+
+-   Finalmente, hay que destacar la correlación positiva entre el consumo diario de alcohol y la edad, entendiendo que a mayor edad, mayor el consumo esperado de alcohol.
+
+**En particular, ¿cómo es la correlación entre la variable a explicar (peso) y el resto de las variables numéricas?**
 
 ```{r corrleacion del peso}
-train %>% 
+pearson <- train %>% 
   select(peso, edad, altura, dias_consumo_comida_rapida, consumo_diario_alcohol,
          dias_actividad_fisica_semanal) %>% 
   correlate() %>% 
   shave() %>% 
   fashion()
+
+reactable(pearson)
 ```
 
-```{r corplot}
-train %>% 
+La correlación entre la variable a explicar y el resto de las numéricas se presenta baja, salvo dos expeciones lógicas con las que muestra una **alta correlación positiva**: la altura (0.58) y la edad (0.28).
+El resto de las variables presentan una baja correalción con el peso, incluso el consumo diario de comida rápida, que intuitivamente tendería a un peso más alto dado la mala calidad que suele manejar ese tipo de alimentos.
+
+```{r corrleacion spearman}
+spearman <- train %>% 
   select(peso, edad, altura, dias_consumo_comida_rapida, consumo_diario_alcohol,
          dias_actividad_fisica_semanal) %>% 
- correlate() %>% 
-  rplot()
+  correlate(method = 'spearman') %>% 
+  shave() %>% 
+  fashion()
+
+reactable(spearman)
 ```
 
+Las correlaciones con el método de Spearman tienen muy pocos cambios.
 
-Para las categorías de la variable frecuencia de hambre mensual, analice gráficamente la distribución en
-términos de frecuencia relativa de:
-a) El consumo semanal de verdura.
-b) El consumo semanal de comida grasa.
-¿Cuáles son las principales características que observa en estos gráficos?
+```{r test peso edad}
+cor.test(train$peso, train$edad, method = "pearson")
+cor.test(train$peso, train$altura, method = "pearson")
 
+```
 
-Acá hay que cambiar el nombre de los valores para ordenarlos. Pasarlos a número. 
+```{r test peso altura}
+cor.test(train$peso, train$edad, method = "spearman")
+cor.test(train$peso, train$altura, method = "spearman")
+```
 
-```{r relacion del hambre}
+Los p valores de ambos test muestran que existe **evidencia a favor de la asociación lineal** entre la edad y la altura con el peso.
+
+```{r dot peso edad}
+ggplot() +
+  geom_point(data = train, aes(x = altura, y = peso, color = genero)) +
+  theme_minimal() +
+  scale_color_viridis(discrete = TRUE)+
+  labs(x="Altura", y="Peso", color = "Género",
+       title = "Peso vs altura", subtitle = "Según género")
+```
+
+El gráfico de puntos muestra la **correlación positiva entre la altura y el peso**.
+Este gráfico tendría menos sentido en el caso de la edad, dado que los valores, si bien numéricos para el dataframe, tienen un sentido más categórico al ser discretos.
+
+**Para las categorías de la variable frecuencia de hambre mensual, analice gráficamente la distribución en términos de frecuencia relativa de:**\
+**a) El consumo semanal de verdura.**\
+**b) El consumo semanal de comida grasa.¿Cuáles son las principales características que observa en estos gráficos?**
+
+```{r relacion del hambre verdura}
 hambre <- train %>% 
   select(frecuencia_hambre_mensual, consumo_semanal_verdura, consumo_semanal_comida_grasa)
 
-ggplot(hambre, aes(frecuencia_hambre_mensual, consumo_semanal_verdura, 
-                   group = frecuencia_hambre_mensual, fill = factor(frecuencia_hambre_mensual))) +
-  geom_boxplot(alpha = 0.75)
-```
-```{r}
-cor.test(hambre$frecuencia_hambre_mensual, hambre$consumo_semanal_verdura, method = "spearman")
+hambre$frecuencia_hambre_mensual <- factor(hambre$frecuencia_hambre_mensual,
+                                           levels = c("Nunca",
+                                                       "Rara vez",
+                                                       "Algunas veces",
+                                                       "Casi siempre",
+                                                       "Siempre",
+                                                       "Dato perdido"))
+
+hambre$consumo_semanal_verdura <- factor(hambre$consumo_semanal_verdura,
+                                           levels = c(
+                                             "4 o más veces al día",
+                                             "3 veces al día",
+                                             "2 veces al día",
+                                             "1 vez al día",
+                                             "4 a 6 veces durante los últimos 7 días",
+                                             "1 a 3 veces durante los últimos 7 días",
+                                            "No comí verduras ni hortalizas durante los últimos 7 días",
+                                            "Dato perdido"))
+
+levels(hambre$consumo_semanal_verdura)[5] <- "4 a 6 veces semanal"
+levels(hambre$consumo_semanal_verdura)[6] <- "1 a 3 veces semanal"
+levels(hambre$consumo_semanal_verdura)[7] <- "0 veces"
+
+ggplot(data = hambre) +
+  geom_bar(mapping = aes(x = frecuencia_hambre_mensual, fill = consumo_semanal_verdura)) +
+  viridis::scale_fill_viridis(discrete = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Frecuencia de hambre mensual", y = "Conteo", fill = "Consumo semanal de verdura", subtitle = "Frecuencia absoluta")
+
+ggplot(data = hambre) +
+  geom_bar(mapping = aes(x = frecuencia_hambre_mensual, fill = consumo_semanal_verdura), position = "fill") +
+  viridis::scale_fill_viridis(discrete = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Frecuencia de hambre mensual", y = "Proporción", fill = "Consumo semanal de verdura", subtitle = "Proporciones apiladas") 
+
+hambre_relat <- hambre %>% 
+  group_by(frecuencia_hambre_mensual) %>% 
+  add_count(name="n")%>%
+  ungroup()%>%
+  group_by(frecuencia_hambre_mensual, consumo_semanal_verdura)%>%
+  add_count(name="n1")%>%
+  transform(norm_count=n1/n)%>%
+  distinct(frecuencia_hambre_mensual,consumo_semanal_verdura,n,n1,norm_count)
+
+
+ggplot(data=hambre_relat)+
+  geom_bar(mapping = aes(x=frecuencia_hambre_mensual, y=norm_count,
+           fill=consumo_semanal_verdura), 
+           stat="identity", position="dodge") +
+  viridis::scale_fill_viridis(discrete = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Frecuencia de hambre mensual", y = "Proporción", fill = "Consumo semanal de verdura", subtitle = "Frecuecia relativa", caption = "Código para el gráfico obtenido de: https://bit.ly/3rXlgKa") 
+
+
 ```
 
 ```{r}
-cor.test(hambre$frecuencia_hambre_mensual, hambre$consumo_semanal_comida_grasa, method = "spearman")
+hambre$consumo_semanal_comida_grasa <- factor(hambre$consumo_semanal_comida_grasa,
+                                           levels = c(
+                                             "4 o más veces al día",
+                                             "3 veces al día",
+                                             "2 veces al día",
+                                             "1 vez al día",
+                                             "4 a 6 veces durante los últimos 7 días",
+                                             "1 a 3 veces durante los últimos 7 días",
+                                            "No comí comida alta en grasa en los últimos 7 días",
+                                            "Dato perdido"))
+
+levels(hambre$consumo_semanal_comida_grasa)[5] <- "4 a 6 veces semanal"
+levels(hambre$consumo_semanal_comida_grasa)[6] <- "1 a 3 veces semanal"
+levels(hambre$consumo_semanal_comida_grasa)[7] <- "0 veces"
+
+ggplot(data = hambre) +
+  geom_bar(mapping = aes(x = frecuencia_hambre_mensual, fill = consumo_semanal_comida_grasa)) +
+  viridis::scale_fill_viridis(discrete = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Frecuencia de hambre mensual", y = "Conteo", fill = "Consumo semanal de comida grasa", subtitle = "Frecuencia absoluta")
+
+ggplot(data = hambre) +
+  geom_bar(mapping = aes(x = frecuencia_hambre_mensual, fill = consumo_semanal_comida_grasa), position = "fill") +
+  viridis::scale_fill_viridis(discrete = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Frecuencia de hambre mensual", y = "Proporción", fill = "Consumo semanal de comida grasa", subtitle = "Proporciones apiladas") 
+
+hambre_relat <- hambre %>% 
+  group_by(frecuencia_hambre_mensual) %>% 
+  add_count(name="n")%>%
+  ungroup()%>%
+  group_by(frecuencia_hambre_mensual, consumo_semanal_comida_grasa)%>%
+  add_count(name="n1")%>%
+  transform(norm_count=n1/n)%>%
+  distinct(frecuencia_hambre_mensual,consumo_semanal_comida_grasa,n,n1,norm_count)
+
+
+ggplot(data=hambre_relat)+
+  geom_bar(mapping = aes(x=frecuencia_hambre_mensual, y=norm_count,
+           fill=consumo_semanal_comida_grasa), 
+           stat="identity", position="dodge") +
+  viridis::scale_fill_viridis(discrete = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Frecuencia de hambre mensual", fill = "Consumo semanal de comida grasa", y = "Proporción", subtitle = "Frecuencia relativa", caption = "Código para el gráfico obtenido de: https://bit.ly/3rXlgKa") 
 ```
+
+En primera instancia, puede verse que son pocos los casos donde los encuestados responden pasar hambre.
+La amplia mayoría dice que nunca lo pasó o que rara vez le sucedió.
+
+Por otro lado, la proporción de encuestados que dice comer fruta 4 o más veces al día entre quienes nunca pasan hambre o rara vez lo hacen es mayor a la proporción de los que se encuentran en la misma categoría y declaran comer comidas grasas 4 o más veces al día.
+
+Finalmente, es interesante ver el comportamiento de los pocos encuestados que siempre dicen pasar hambre: este es el grupo que tiene una mayor porpoción de consumidores de comidas grasas en las tres categorías más frecuentes, mientras que son los que más declaran haber comido 0 veces verduras en la semana.
+
+Si bien es una muestra altamente desbalanceada, es interesante pensar en términos de un patrón de asociación entre alimentación saludable y capacidad económica.
 
 ## Modelo inicial
 
 Se plantea que una primera alternativa para modelar el peso es:
 
-E(peso) = β0 +β1altura+β2edad+β3genero+β4diasActividadF isicaSemanal+β5consumoDiarioAlcohol
+*E(peso) = β0 +β1altura+β2edad+β3genero+β4diasActividadF isicaSemanal+β5consumoDiarioAlcohol*
 
-¿Cuál es la interpretación de cada uno de los coeficientes estimados? ¿Son significativos? ¿El modelo resulta
-significativo para explicar el peso? ¿Qué porcentaje de la variabilidad explica el modelo?
+**¿Cuál es la interpretación de cada uno de los coeficientes estimados?\
+¿Son significativos?\
+¿El modelo resulta significativo para explicar el peso?\
+¿Qué porcentaje de la variabilidad explica el modelo?**
+
+#### Modelo numérico inicial
 
 ```{r modelo inicial}
-modelo_inicial <- lm(peso ~ altura + edad + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+modelo_inicial <- lm(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol,
                      data = train)
-tidy(modelo_inicial)
+reactable(tidy(modelo_inicial, conf.int = TRUE))
 ```
 
-```{r significatividad individual}
-tidy_inicial <- tidy(modelo_inicial, conf.int = TRUE)
+Interpretaciones de los **coeficientes**:
 
-tidy_inicial %>%
-  select(term, statistic, p.value, conf.low, conf.high) 
+-   Intercept: B0 sería el peso esperado para una persona que no nació y que no tiene altura, lo cual no tiene sentido y es coherente entonces que su valor sea negativo.
+-   Altura: indica que por cada centímetro de más, el peso esperado aumentaría en 0,68kg.
+-   Edad: de la misma manera, por cada año de aumento de edad, el aumento del peso esperado sería de 1,35kg.
+-   Género: señala que el peso esperado de los hombres es 1,26kg mayor que el peso esperado de las mujeres.
+-   Actívidad física: por cada día de actividad física a la semana, el peso esperado se reduciría en 0,08kg.
+-   Consumo alcohol: por cada consumo alcohólico al día, el peso esperado aumentaría en 0,007kg.
+
+Es necesario señalar que estas interpretaciones tienen una condición necesaria: su interpretación se debe realizar haciendo una abstracción análitica según la cual todas las variables se fijan en un valor y solo se modifica la variable analizada en cuestión.
+Es decir, la interpretación del incremento del peso esperado por cada año de edad es solo válida en tanto la altura, el género y las otras variables se consideren fijas.
+
+En términos de la **significativdad individual** de las variables, por sus p-valores, vemos que tanto la altura, la edad y el género son variables que tienen relaciones significativas con la variable dependiente (peso).
+En tanto vemos que el p-valor de la actividad física y el consumo de alcohol no nos permite rechazar la hipótesis nula y esto se refuerza al ver que sus intervalos de confianza contienen al 0.
+
+En cuanto a la **significatividad global** del modelo, vemos el resumen de su información, que presenta el estadístico F y el p-valor asociado.
+Este p-valor nos indica que el modelo sí resulta significativo para explicar el peso.
+
+```{r inicial significatividad global}
+summary(modelo_inicial)
 ```
 
-```{r significatividad global}
-broom::glance(modelo_inicial)
+Más allá de su significativdad global, a través de la métrica de R2 ajustado, vemos que el modelo solo explica una porción reducida de la variabilidad del peso: un 35,39%.
+Esto tiene que ver con que solo se han incluido 5 variables en el modelo y que no todas han resultado significativas, con el agregado de más variables, esta variabilidad explicada aumentará naturalmente.
+
+```{r inicial variabilidad}
+reactable(glance(modelo_inicial))
 ```
 
 ## Modelo categóricas
 
+**Se sugiere probar un modelo que incopore el consumo semanal de snacks y una interacción entre el género y la edad, en lugar de actividad física y consumo de alcohol:**
+
+*E(peso) = β0 + β1altura + β2edad + β3genero + β4consumoSemanalSnacks + β5genero · edad*
+
+**Además se pide explícitamente que la categoría "No comí comida salada o snacks en los últimos 7 días" de la variable consumoSemanalSnacks se encuentre como nivel/categoría basal.**
+
+#### Modelo categórico original
+
 ```{r modelo categoricas}
+train_cat <- train
+train_cat$consumo_semanal_snacks <- factor(train_cat$consumo_semanal_snacks, 
+                                       levels = c(
+                                         "No comí comida salada o snacks en los últimos 7 días",
+                                         "1 a 3 veces durante los últimos 7 días", 
+                                         "4 a 6 veces durante los últimos 7 días",
+                                         "1 vez al día",
+                                         "2 veces al día",
+                                         "3 veces al día",
+                                         "4 o más veces al día",
+                                         "Dato perdido"
+                                         ))
+
 modelo_cat <- lm(peso ~ altura + edad + genero + consumo_semanal_snacks + (genero*edad),
-                 data = train)
-tidy(modelo_cat, conf.int = TRUE)
-```
-```{r}
-tidy(anova(modelo_cat))
+                 data = train_cat)
+reactable(tidy(modelo_cat, conf.int = TRUE))
 ```
 
-Siguiente
+```{r variabilidad modelo cat}
+reactable(glance(modelo_cat))
+```
+
+**¿Cuál es la interpretación de los coeficientes estimados para las categorías de *consumoSemanalSnacks* y *genero . edad*? ¿Son significativas? ¿Qué porcentaje de la variabilidad explica el modelo?**
+
+-   Por un lado, los coeficientes indicarían que para cualquier nivel de **consumo de snacks** el peso esperado tendería a ser más bajo que en el caso de quienes no consumen ningún snack a lo largo de la semana.
+    Este es un comportamiento llamativo y se hace más extraño aún al evaluar que el peso esperado para una persona que consume snack 4 veces al día es más bajo que incluso aquellos que consumen 1 vez al día.
+
+-   En tanto la interacción entre edad y género sí parece tener un sentido más intuitivo, dado que sus coeficientes plantean que la combinación a medida que aumenta la edad y el género sea masculino (en este caso, el género basal sería femenino), el peso esperado aumentaría.
+
+-   Más allá de estas observaciones, es importante señalar que, en términos de significatividad, solo la altura y la edad se mantienen como variables significativas según su p-valor; mientras que no todas las categorías de la variable de consumo semanal de snack pueden considerarse significativas, si no solo dos de sus categorías (el consumo 1 vez al día y el consumo entre 4 y 6 veces a la semana).
+
+-   A pesar de algunos comportamientos contraintuitivos, este modelo presenta una muy leve mejoría en la variabilidad explicada respecto del modelo numérico inicial.
+    En este caso, el modelo explica el 35,75% de la variabilidad del peso.
+
+#### Modelo categórico modificado
+
+**En caso de detectar que existen categorías no significativas de la variable consumoSemanalSnacks evaluar si la variable es significativa en su conjunto y, en caso afirmativo, proponer una redefinición de las mismas que permita obtener una mayor proporción de categorías significativas individualmente. Luego, analizar si existen cambios en la variabilidad explicada por el modelo.**
+
+La significatividad en conjunto de la variable categórica de consumo semanal de snacks se evalúa con un test conjunto F:
+
+```{r anova snack}
+reactable(tidy(anova(modelo_cat)))
+```
+
+Dada la tabla de ANOVA, se ve que la variable de consumo semanal de snacks sí resulta significativa en su conjunto para explicar el peso.
+Así, se agrupan algunos de sus valores para buscar formas más adecuadas respecto a la significatividad individual de las categorías y se vuelve a evaluar su situación.
+
+```{r mutate consumo snacks}
+train_cat <- train_cat %>% 
+  mutate(consumo_semanal_snacks = case_when(
+    consumo_semanal_snacks == "No comí comida salada o snacks en los últimos 7 días" ~ "0 veces",
+    consumo_semanal_snacks == "1 a 3 veces durante los últimos 7 días" ~ "Menos de 1 vez al día",
+    consumo_semanal_snacks == "4 a 6 veces durante los últimos 7 días" ~ "Menos de 1 vez al día",
+    consumo_semanal_snacks == "1 vez al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "2 veces al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "3 veces al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "4 o más veces al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "Dato perdido" ~ "Dato perdido"
+  )) %>% 
+  mutate(consumo_semanal_snacks = as.factor(consumo_semanal_snacks))
+```
+
+```{r categorico modificado}
+modelo_cat_mod <- lm(peso ~ altura + edad + genero + consumo_semanal_snacks + (genero*edad),
+                 data = train_cat)
+reactable(tidy(modelo_cat_mod, conf.int = TRUE))
+```
+
+```{r anova snack modificado}
+reactable(tidy(anova(modelo_cat_mod)))
+```
+
+```{r variabilidad modelo cat modificado}
+reactable(glance(modelo_cat_mod))
+```
+
+Con las modificaciones introducidas, todas las categorías de la variable de consumo semanal de snack se tornaron significativas y la variable en su conjunto también mejoró su significatividad respecto del peso.
+En tanto la variabilidad explicada del peso por el modelo empeoró levemente, bajando de un 35,75% a un 35,71%
+
+## Modelos propios y evaluación
+
+**Realizar 2 modelos lineales múltiples adicionales y explicar brevemente la lógica detrás de los mismos (se valorará la creación y/o inclusión de variables nuevas).**
+
+#### Transformación de los datos
+
+El primero de los modelos utilizará todas las variables del dataset original de train (sin considerar las modificaciones realizadas a la variable de snacks), teniendo en cuenta que toda la información que puedan aportar podría ayudar a aumentar la variabilidad que explica el modelo .También se agregará una combinación de variables conocida como la **fórmula de Lorentz**.
+Esta fórmula se trata de una de las tantas combinaciones "mágicas" para calcular el peso ideal de una persona.
+Más allá de su (in)validez en términos de salud integral, se utiliza en este trabajo para evaluar si tiene alguna clase de condicionamiento o efecto en el modelo.
+
+```{r data modelo propio uno}
+train_modelo_uno <- train %>% 
+  mutate(peso_lorentz = case_when(
+    genero == "Masculino" ~ altura - 100 -((altura - 150)/4),
+    genero == "Femenino" ~ altura - 100 -((altura - 150)/2.5)
+  ))
+
+```
+
+El segundo modelo también contará con todas las variables originales e incluirá dos variables que combinan por un lado los **hábitos saludables** (actividad física, consumo de frutas y consumo de verduras) y por otro los **hábitos nocivos** (consumo de alcohol, gaseosas, y comida rápida).
+Cada variable contará con 3 categorías: buenos, regulares y malos.
+
+```{r data modelo propio dos}
+malos <- c("No comí frutas durante los últimos 7 días", "1 a 3 veces durante los últimos 7 días")
+buenos <- c("1 vez al día", "2 veces al día", "3 veces al día", "4 o más veces al día" )
+
+train_modelo_dos <- train %>% 
+  mutate(habitos_saludables = case_when(
+    (consumo_semanal_frutas %in% malos &
+       consumo_semanal_verdura %in% malos &
+       dias_actividad_fisica_semanal %in% c(0, 1, 2)) ~ "Malos",
+    (consumo_semanal_frutas %in% buenos &
+       consumo_semanal_verdura %in% buenos |
+       dias_actividad_fisica_semanal %in% c(4, 5, 6, 7)) ~ "Buenos",
+    TRUE ~ "Regulares"
+  ))
+   
+altos <- c("1 vez al día", "2 veces al día", "3 veces al día", "4 o más veces al día")
+bajos <- c("No tomé gaseosas en los últimos 7 días", "1 a 3 veces durante los últimos 7 días")
+
+train_modelo_dos <- train_modelo_dos %>% 
+  mutate(habitos_nocivos = case_when(
+    (consumo_diario_alcohol > 1 |
+       dias_consumo_comida_rapida > 1 &
+       consumo_semanal_gaseosas %in% altos) ~ "Altos",
+    (consumo_diario_alcohol == 0 &
+       dias_consumo_comida_rapida < 1 &
+       consumo_semanal_gaseosas %in% bajos) ~ "Bajos",
+    TRUE ~ "Regulares")
+  )
+```
+
+Se corrobora que ninguno de los casos de habitos saludables buenos coincida con los criterios de los malos y lo mismo para los habitos nocivos altos y bajos.
+
+```{r chequeo nuevas variables}
+saludables_malos <- filter(train, consumo_semanal_frutas %in% malos &
+                 consumo_semanal_verdura %in% malos &
+                 dias_actividad_fisica_semanal %in% c(0, 1, 2))
+saludables_buenos <- filter(train, consumo_semanal_frutas %in% buenos &
+                 consumo_semanal_verdura %in% buenos |
+                 dias_actividad_fisica_semanal %in% c(4, 5, 6, 7))
+nocivos_altos <- filter(train, consumo_diario_alcohol > 1 |
+                 dias_consumo_comida_rapida > 1 &
+                 consumo_semanal_gaseosas %in% altos)
+nocivos_bajos <- filter(train, consumo_diario_alcohol == 0 &
+                 dias_consumo_comida_rapida < 2 &
+                 consumo_semanal_gaseosas %in% bajos)
+
+saludables_malos <- unique(saludables_malos$record)
+saludables_buenos <- unique(saludables_buenos$record)
+nocivos_altos <- unique(nocivos_altos$record)
+nocivos_bajos <- unique(nocivos_bajos$record)
+
+any(saludables_malos %in% saludables_buenos)
+any(nocivos_bajos %in% nocivos_altos)
+
+rm(saludables_malos, saludables_buenos, nocivos_altos, nocivos_bajos, buenos, malos, altos, bajos)
+```
+
+**Evaluar la performance del modelo inicial, el modelo categóricas con las categorías redefinidas de la variable consumoSemanalSnacks y los modelos desarrollados en este punto en el dataset de entrenamiento y evaluación (usar dataset "encuesta_salud_test.csv"). La evaluación de performance consiste en comparar la performance en términos del R cuadrado ajustado, RMSE y MAE sobre el set de entrenamiento y en términos de RMSE y MAE sobre el set de evaluación.**
+
+#### Entrenamiento de los nuevos modelos
+
+```{r modelo propio uno}
+modelo_propio_uno <- lm(peso ~ edad + genero + nivel_educativo + altura + peso + frecuencia_hambre_mensual + dias_consumo_comida_rapida + edad_consumo_alcohol + consumo_diario_alcohol + dias_actividad_fisica_semanal + consumo_semanal_frutas + consumo_semanal_verdura + consumo_semanal_gaseosas + consumo_semanal_snacks + consumo_semanal_comida_grasa + peso_lorentz,
+                     data = train_modelo_uno)
+
+reactable(tidy(anova(modelo_propio_uno)) %>% arrange(p.value))
+```
+
+```{r modelo propio 2}
+modelo_propio_dos <- lm(peso ~ edad + genero + nivel_educativo + altura + peso + frecuencia_hambre_mensual + dias_consumo_comida_rapida + edad_consumo_alcohol + consumo_diario_alcohol + dias_actividad_fisica_semanal + consumo_semanal_frutas + consumo_semanal_verdura + consumo_semanal_gaseosas + consumo_semanal_snacks + consumo_semanal_comida_grasa + habitos_saludables + habitos_nocivos,
+                     data = train_modelo_dos)
+
+reactable(tidy(anova(modelo_propio_dos)) %>% arrange(p.value)) 
+```
+
+En base a las tablas ANOVA de cada uno de los nuevos modelos, podemos apreciar que la variable `peso_lorentz` sí resulta estadísticamente significativa para predecir el peso, pero que las combinaciones generadas en las variables `habitos_saludables` y `habitos_nocivos` no lo son.
+
+#### Evaluación de los modelos en train
+
+```{r comparacion modelos}
+
+modelos <- list(modelo_inicial = modelo_inicial, 
+                modelo_cat_mod = modelo_cat_mod,
+                modelo_propio_uno = modelo_propio_uno,
+                modelo_propio_dos = modelo_propio_dos)
+
+ra_train <- map_df(modelos, glance,
+                   .id = "modelo") %>% 
+  arrange(desc(adj.r.squared)) %>% 
+  select(modelo, r.squared, adj.r.squared, p.value)
+
+reactable(ra_train)
+
+```
+
+```{r predicciones train}
+
+pred_train <- map(modelos, augment)
+pred_train <- map_dfr(pred_train, .f = metrics, truth = peso, estimate = .fitted, .id="modelo") %>%
+  arrange(.estimate) %>% 
+  select(modelo, metrica = ".metric", 4) %>% 
+  filter(metrica %in% c("rmse", "mae"))
+
+reactable(pred_train)
+```
+
+#### Evaluación de los modelos en test
+
+Dado que los modelos han sido entrenados sobre distintos conjutos de datos por las modificaciones que se fueron realizando para cada uno, corresponde aplicar las mismas transformaciones a los datos donde se testearán.
+
+```{r modelo inicial test}
+pred_test_inicial <- augment(modelo_inicial, newdata = test)
+pred_test_inicial <- metrics(pred_test_inicial, truth = peso, estimate = .fitted) %>% 
+  mutate(modelo = "modelo_inicial")%>% 
+  select(modelo, metrica = ".metric", 3) %>% 
+  filter(metrica %in% c("rmse", "mae")) %>% 
+  mutate(metrica = case_when(
+    metrica == "rmse" ~ "rmse_test",
+    metrica == "mae" ~ "mae_test"
+  ))
+```
+
+```{r modificaciones cat test}
+test_cat <- test %>% 
+  mutate(consumo_semanal_snacks = case_when(
+    consumo_semanal_snacks == "No comí comida salada o snacks en los últimos 7 días" ~ "0 veces",
+    consumo_semanal_snacks == "1 a 3 veces durante los últimos 7 días" ~ "Menos de 1 vez al día",
+    consumo_semanal_snacks == "4 a 6 veces durante los últimos 7 días" ~ "Menos de 1 vez al día",
+    consumo_semanal_snacks == "1 vez al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "2 veces al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "3 veces al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "4 o más veces al día" ~ "Más de 1 vez al día",
+    consumo_semanal_snacks == "Dato perdido" ~ "Dato perdido"
+  )) %>% 
+  mutate(consumo_semanal_snacks = as.factor(consumo_semanal_snacks))
+```
+
+```{r modelo cat test}
+pred_test_cat <- augment(modelo_cat_mod, newdata = test_cat)
+pred_test_cat <- metrics(pred_test_cat, truth = peso, estimate = .fitted) %>% 
+  mutate(modelo = "modelo_cat_mod")%>% 
+  select(modelo, metrica = ".metric", 3) %>% 
+  filter(metrica %in% c("rmse", "mae")) %>% 
+  mutate(metrica = case_when(
+    metrica == "rmse" ~ "rmse_test",
+    metrica == "mae" ~ "mae_test"
+  ))
+```
+
+```{r modificaciones propio uno test}
+test_modelo_uno <- test %>% 
+  mutate(peso_lorentz = case_when(
+    genero == "Masculino" ~ altura - 100 -((altura - 150)/4),
+    genero == "Femenino" ~ altura - 100 -((altura - 150)/2.5)
+  ))
+```
+
+```{r modelo propio uno test}
+pred_test_propio_uno <- augment(modelo_propio_uno, newdata = test_modelo_uno)
+pred_test_propio_uno <- metrics(pred_test_propio_uno, truth = peso, estimate = .fitted) %>% 
+  mutate(modelo = "modelo_propio_uno")%>% 
+  select(modelo, metrica = ".metric", 3) %>% 
+  filter(metrica %in% c("rmse", "mae")) %>% 
+  mutate(metrica = case_when(
+    metrica == "rmse" ~ "rmse_test",
+    metrica == "mae" ~ "mae_test"
+  ))
+```
+
+```{r modificaciones propio dos test}
+malos <- c("No comí frutas durante los últimos 7 días", "1 a 3 veces durante los últimos 7 días")
+buenos <- c("1 vez al día", "2 veces al día", "3 veces al día", "4 o más veces al día" )
+
+test_modelo_dos <- test %>% 
+  mutate(habitos_saludables = case_when(
+    (consumo_semanal_frutas %in% malos &
+       consumo_semanal_verdura %in% malos &
+       dias_actividad_fisica_semanal %in% c(0, 1, 2)) ~ "Malos",
+    (consumo_semanal_frutas %in% buenos &
+       consumo_semanal_verdura %in% buenos |
+       dias_actividad_fisica_semanal %in% c(4, 5, 6, 7)) ~ "Buenos",
+    TRUE ~ "Regulares"
+  ))
+   
+altos <- c("1 vez al día", "2 veces al día", "3 veces al día", "4 o más veces al día")
+bajos <- c("No tomé gaseosas en los últimos 7 días", "1 a 3 veces durante los últimos 7 días")
+
+test_modelo_dos <- test_modelo_dos %>% 
+  mutate(habitos_nocivos = case_when(
+    (consumo_diario_alcohol > 1 |
+       dias_consumo_comida_rapida > 1 &
+       consumo_semanal_gaseosas %in% altos) ~ "Altos",
+    (consumo_diario_alcohol == 0 &
+       dias_consumo_comida_rapida < 1 &
+       consumo_semanal_gaseosas %in% bajos) ~ "Bajos",
+    TRUE ~ "Regulares")
+  )
+```
+
+```{r chequeo test}
+saludables_malos <- filter(test, consumo_semanal_frutas %in% malos &
+                 consumo_semanal_verdura %in% malos &
+                 dias_actividad_fisica_semanal %in% c(0, 1, 2))
+saludables_buenos <- filter(test, consumo_semanal_frutas %in% buenos &
+                 consumo_semanal_verdura %in% buenos |
+                 dias_actividad_fisica_semanal %in% c(4, 5, 6, 7))
+nocivos_altos <- filter(test, consumo_diario_alcohol > 1 |
+                 dias_consumo_comida_rapida > 1 &
+                 consumo_semanal_gaseosas %in% altos)
+nocivos_bajos <- filter(test, consumo_diario_alcohol == 0 &
+                 dias_consumo_comida_rapida < 2 &
+                 consumo_semanal_gaseosas %in% bajos)
+
+saludables_malos <- unique(saludables_malos$record)
+saludables_buenos <- unique(saludables_buenos$record)
+nocivos_altos <- unique(nocivos_altos$record)
+nocivos_bajos <- unique(nocivos_bajos$record)
+
+any(saludables_malos %in% saludables_buenos)
+any(nocivos_bajos %in% nocivos_altos)
+
+rm(saludables_malos, saludables_buenos, nocivos_altos, nocivos_bajos, buenos, malos, altos, bajos)
+```
+
+```{r modelo propio dos test}
+pred_test_propio_dos <- augment(modelo_propio_dos, newdata = test_modelo_dos)
+pred_test_propio_dos <- metrics(pred_test_propio_dos, truth = peso, estimate = .fitted) %>% 
+  mutate(modelo = "modelo_propio_dos")%>% 
+  select(modelo, metrica = ".metric", 3) %>% 
+  filter(metrica %in% c("rmse", "mae")) %>% 
+  mutate(metrica = case_when(
+    metrica == "rmse" ~ "rmse_test",
+    metrica == "mae" ~ "mae_test"
+  ))
+```
+
+```{r}
+pred_test <- rbind(pred_test_inicial, pred_test_cat, pred_test_propio_uno, pred_test_propio_dos)
+reactable(pred_test %>% arrange(metrica))
+```
+
+#### Comparación final
+
+**¿Cuál es el mejor modelo para nuestro objetivo de predecir el peso? ¿Por qué?**
+
+```{r}
+reactable(ra_train)
+
+reactable(rbind(pred_train, pred_test) %>% arrange(metrica), pagination = FALSE, filterable = TRUE)
+```
+
+Los resultados presentan una situación interesante: mientras que en la predicción sobre los datos de entrenamiento el primer modelo propio (el que incluye la fórmula de Lorentz) es el mejor modelo dado que tiene el mayor R cuadrado ajustado y los menores niveles de MAE y RMSE; en el caso de testing esto no se repite.
+
+En estos nuevos datos, si bien el primer modelo propio es el que tiene menor MAE, el modelo categórico modificado es el que tiene el menor RMSE. Si bien esto puede ser una señal de sobreajuste del primer modelo propio, dado que el MAE puede ser una métrica más robusta ante valores atípicos, se considera que el mejor modelo es el primer modelo propio. 
+
+## Diagnóstico del modelo
+
+**Analizar en profundidad el cumplimiento de los supuestos del modelo lineal para el modelo inicial.**
+
+El modelo lineal requiere el cumplimiento de cuatro supuestos:
+
+1.  La esperanza de los errores tiene media = 0.
+2.  Los errores tienen varianza constante (homocedasticidad).
+3.  Los errores tienen distribución normal
+4.  Los errores son independientes entre sí.
+
+```{r supuestos modelo inicial}
+plot(modelo_inicial)
+```
+
+En función de los gráficos, se puede evaluar que:
+
+1.  Residuos vs. valores predichos: la curvatura es sumamente leve, pero esta hace que no se pueda confirmar que la varianza sea constante, lo que implica que el supuesto de homocedasticidad no se pueda dar por aceptado en este caso.
+
+2.  Normalidad de los errores: el normal Q-Q plot muestra que, principalmente en los extremos altos, no se ajusta para nada a la distribución teórica coincidente con la normalidad, por lo tanto, el supuesto de la distribución normal de los residuos no se cumple.
+
+3.  Hay observaciones con un leverage elevado, lo que las hace influyente para el modelo y pueden violar el supuesto de independencia.
+
+## Modelo robusto
+
+**Leer el archivo "encuesta_salud_modelo6.csv". Este último consiste en el dataset original de train con la incorporación de algunas observaciones adicionales que pueden incluir valores atípicos. En particular, observar la relación entre peso y altura ¿Qué ocurre con estos nuevos datos?**
+
+```{r datos nuevos}
+modelo6 <- read.csv('encuesta_salud_modelo6.csv', encoding = 'UTF-8')
+reactable(head(modelo6))
+```
+
+```{r comparacion peso altura}
+originales <- ggplot() +
+  geom_point(data = train, aes(x = altura, y = peso), color = "#5ec962") +
+  theme_minimal() +
+  labs(x="Altura", y="Peso",
+       title = "Datos originales", subtitle = "Peso vs altura")
+
+nuevos <- ggplot() +
+  geom_point(data = modelo6, aes(x = altura, y = peso), color = "#3b528b") +
+  theme_minimal() +
+  labs(x="Altura", y="Peso",
+       title = "Datos modelo6", subtitle = "Peso vs altura")
+
+plot_grid(originales, nuevos)
+```
+
+```{r corrleacion modelo6}
+cor_original <- train %>% 
+  select(peso, altura) %>% 
+  correlate(method = 'spearman') %>% 
+  shave() %>% 
+  fashion() 
+
+cor_nueva <- modelo6 %>% 
+  select(peso, altura) %>% 
+  correlate(method = 'spearman') %>% 
+  shave() %>% 
+  fashion() 
+(cor_nueva$peso)
+
+```
+
+Los nuevos datos introducen una importante cantidad de datos atípicos con pesos muy elevados.
+Esto no implica necesariamente que sean datos erróneos, pero sí poco frecuentes.
+Estas nuevas observaciones introducen un cambio en la relación entre las variables, que se expresa en una menor correlación de Spearman entre peso y altura.
+Mientras que en los datos originales la correlación de Spearman entre peso y altura tenía un valor de`r paste(cor_original$peso[2])`, en el caso del nuevo dataset este valor se reduce a `r paste(cor_nueva$peso[2])`.
+
+#### Modelo lineal con nuevos datos
+
+**Entrenar el modelo inicial con estos nuevos datos y comentar qué se observa en los coeficientes estimados y las métricas de evaluación (R cuadrado ajustado, RMSE y MAE) respecto al modelo entrenado con el set de entrenamiento original**
+
+```{r modelo nuevo}
+modelo_nuevo <- lm(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+                     data = modelo6)
+
+reactable(tidy(modelo_nuevo, conf.int = TRUE))
+```
+
+Los nuevos datos acarrean dos modificaciones importantes:
+
+-   Por un lado, puede verse que **cada variable resulta menos significativa** en este nuevo modelo que en el anterior, dado que sus p valores son más altos para todas las variables.
+    Esto también tiene un impacto en los coeficientes, que se ven trastocados: cada centímetro tiene un menor impacto en el peso esperado que en el modelo anterior, mientras que la edad ahora genera un impacto más alto en el peso esperado.
+    El caso más llamativo es el del género: ahora, en el caso de los hombres el peso esperado aumenta en más de 3 kilos respecto al de las mujeres, cuando en los datos originales el aumento esperado era de solo 1,26 kg.
+    Estos valores tienen lógicamente que ver con el apalancamiento que pueden generar los nuevos casos más extremos.
+
+-   Por otro lado, estos datos que influencian al modelo más que antes hacen que **su explicabilidad resulte menor**: según el R cuadrado ajustado, la variabilidad del peso que explica el nuevo modelo se reduce fuertemente.
+    Mientras que con los datos originales explicaba un 35,39%, con estos datos solo explica un 10,94% de la variabilidad.
+
+```{r variabilidad modelo nuevo}
+reactable(glance(modelo_nuevo))
+```
+
+Lógicamente, esta menor capacidad del modelo de explicar la variabilidad del peso conduce a **una menor capacidad de predicción**.
+
+```{r prediccion modelo nuevo}
+pred_modelo_nuevo <- augment(modelo_nuevo)
+pred_modelo_nuevo <- metrics(pred_modelo_nuevo, truth = peso, estimate = .fitted) %>% 
+  mutate(modelo = "modelo_datos_nuevos")%>% 
+  select(modelo, metrica = ".metric", 3) %>% 
+  filter(metrica %in% c("rmse", "mae")) 
+
+reactable(pred_modelo_nuevo)
+```
+
+Mientras que los errores del modelo original habían sido de RMSE = 9,910 y MAE = 7,455, vemos que en el caso de entrenar un modelo lineal simple con los mismos parámetros pero sobre datos con muchos valores atípicos, estos resultados empeoran considerablemente. 
+
+En este nuevo modelo, el RMSE aumenta en un `r paste0(round((15.744*100)/9.910-100, 2),"%")` y el MAE lo hace en un `r paste0(round((9.233*100)/7.455-100, 2),"%")`.
+
+
+#### Modelo robusto con nuevos datos
+
+**Entrenar un modelo robusto con la misma especificación que el modelo inicial sobre los nuevos datos. Comparar los coeficientes y su performance (RMSE y MAE) respecto al modelo inicial no robusto entrenado en este punto. ¿Qué puede concluir al respecto?**
+
+Para la construcción del modelo robustao se utiliza la función `lmrob` del paquete `robustbase`, por recomendación de la cátedra.
+
+```{r modelo 6 robusto}
+modelo_robusto <- robustbase::lmrob(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol,
+                     data = modelo6)
+
+reactable(tidy(modelo_robusto, conf.int = TRUE))
+```
+
+Respecto de los coeficientes generados por el modelo robusto, se observa que:
+
+* Por un lado, la **significatividad de las variables y sus coeficientes se vuelven a asemejar mucho con las expresadas en el modelo inicial**. Por ejemplo, la altura vuelve a tener la misma significativdad y casi el mismo coeficiente que en el modelo original. Es decir que por cada centímetro de más, el aumento del peso esperado es de 0,62kg. Casi el doble que en el modelo no robusto sobre los mismos datos.
+
+Algo muy similar y más expresivo sucede con el género: en el caso de los hombres, la esperanza del peso aumenta en 1,3kg respecto del peso esperado de las mujeres, cuando en el modelo inicial este aumento esperado era de 1,26kg y en el modelo no robusto era de 3,31kg, expresando **un posible apalancamiento de los resultados por casos de hombres con mucho sobrepeso**. 
+
+* Por otro lado, incluso la **variabilidad explicada por el modelo aumenta considerablemente**, llevando el valor del R cuadrado un 0,38. Es decir, el modelo robusto explica un 38,88% de la variabilidad del peso, mientras que el modelo simple con estos datos solo explicaba un 11%. Cabe destacar que la salida del modelo robusto solo incluye el R cuadrado y no el R cuadrado ajustado, que sería más adecuado dada la cantidad de variables del modelo. 
+
+```{r variabilidad modelo robusto}
+reactable(glance(modelo_robusto))
+```
+
+#### Comparación de RMSE y MAE
+
+```{r prediccion modelo robusto}
+pred_modelo_robusto <- augment(modelo_robusto)
+pred_modelo_robusto <- metrics(pred_modelo_robusto, truth = peso, estimate = .fitted) %>% 
+  mutate(modelo = "modelo_robusto_datos_nuevos")%>% 
+  select(modelo, metrica = ".metric", 3) %>% 
+  filter(metrica %in% c("rmse", "mae")) 
+
+reactable(rbind(pred_modelo_nuevo, pred_modelo_robusto))
+```
+
+Lo expresado en la tabla de resultados **refleja claramente la diferencia en la robutez de los modelos**, pero también de las métricas. En tanto se use una métrica robusta como el MAE, vemos que el error es menor en el caso del modelo lineal robusto que en el caso del modelo lineal original. 
+
+Por su parte, el RMSE, más sensible a los errores por valores atípicos, resulta más elevado en el caso del modelo robusto que en el caso del modelo original. 
+
+Más allá de la diferencia con esta segunda métrica, se concluye que ante datos que cuentan con observaciones atípicas, es mejor contar con el modelo lineal robusto y con una métrica robusta, que con el modelo lineal simple. 
+
+
