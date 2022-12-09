@@ -1,0 +1,38 @@
+---
+title: "Análisis del volumen operado de GD30 como serie de tiempo"
+author: "Lisandro Carrasco"
+date: "2022-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introducción
+
+El bono soberano GD30 es el activo de renta fija más operado en la Argentina en los últimos tiempos. Este bono global de la República Argentina se caracteriza por ser el más utilizado para hacer una operación que resulta en la compra de divisas, conocidad como dolar MEP o Cable. 
+La posibilidad de comprar el bono GD30 en pesos y venderlo como GD30D (MEP) o GD30C (Cable) para hacerse de dólares evitando cualquier límite regulatorio, popularizó su uso entre un enorme porcentaje de los operadores del mercado argentino, desde pequeños y medianos ahorritas hasta grandes empresas. De hecho, dado que el pago de intereses por la tenencia de este bono es muy bajo (así como muchos economistas descuentan que el bono será reestructurado a la brevedad), prácticamente el único incentivo que presenta la compra o tenencia de este bono es hacerse de dólares. 
+Esta gran participación de usuarios del mercado y su volumen diario lo hacen uno de los más representativos del mercado de bonos local. 
+En este trabajo, se busca observar el comportamiento de ese volumen operado, tratando de entender sus componentes como una serie temporal, explorando si hay estacionalidad en sus movimientos y evaluando técnicas de predicción en el tiempo. 
+
+
+Para esto, vemos a trabajar con dos tipos de modelos:
+
+* ARIMA
+* Prophet
+
+## Datos y librerías
+
+Los datos del volumen operado de un bono se pueden obtener de la mayoría de las páginas webs de las sociedades bursátiles argentinas. En este caso, obtenemos un Excel de la web de [Rava Bursátil](https://www.rava.com/perfil/gd30) con los datos de cotización y volumen negociado del bono para cada día desde su emisión. 
+
+
+
+```{r cars}
+summary(cars)
+```
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
