@@ -24,15 +24,228 @@ Para esto, vemos a trabajar con dos tipos de modelos:
 
 ## Datos y librerías
 
-Los datos del volumen operado de un bono se pueden obtener de la mayoría de las páginas webs de las sociedades bursátiles argentinas. En este caso, obtenemos un Excel de la web de [Rava Bursátil](https://www.rava.com/perfil/gd30) con los datos de cotización y volumen negociado del bono para cada día desde su emisión. 
+Los datos del volumen operado de un bono se pueden obtener de la mayoría de las páginas webs de las sociedades bursátiles argentinas. En este caso, se obtiene un .csv de la web de [Rava Bursátil](https://www.rava.com/perfil/gd30) con los datos de cotización y volumen negociado del bono para cada día desde su emisión. 
+
+Para el procesamiento de datos y el análisis de la serie de tiempo, se utiliza:¿n las siguientes librerías: 
 
 
+```{r librerias}
+library(dplyr)
+library(ggplot2)
+library(prophet)
+library(lubridate)
+library(readxl)
+library(tsibble)
+library(forecast)
+library(feasts)
+library(tidymodels)
+library(modeltime)
 
-```{r cars}
-summary(cars)
 ```
 
+## ARIMA
+
+ARIMA es un modelo estadístico utilizado para analizar y modelar series de tiempo. Sus siglas corresponden a "Autoregressive Integrated Moving Average" y, como lo indica su nombre, pertenece a la familia de los modelos autoregresivos. La autoregresión y la media móvil son los dos componentes que se utilizan para modelar una serie de tiempo en un modelo ARMA, pero la "I" de ARIMA corresponde a un tercer componente de "integración". 
+
+* Autoregresión: es el componente que apunta a que se puede formular una regresión (similar a un modelo lineal generalizado, pero no propiamente) que permita predecir el valor presente o futuro de una variable dependiente en función de sus propios valores anteriores. 
+* Integración: es una operación que se lleva adelante para convertir a las series en estacionarias (es decir, con una media y varianza constante). La diferencia entre ARMA y ARIMA radica en esta integración, que permite mejorar la capacidad predictiva del modelo ante series de tiempo no estacionales y con variaciones no lineales.  
+* Media móvil: es la forma de calcular el promedio sobre una cierta cantidad de valores pasados de la variable en cuestión. 
+
+## Prophet
+
+## Descomposición de la serie de tiempo
+
+* Tendencia general. 
+
+* Variación estacional.
+
+* Variación cíclica.
+
+* Ruido blanco. 
+
+```{r}
+
+data <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>% 
+  select(fecha, volumen) %>% 
+  mutate(fecha = as.Date(fecha)) %>% 
+  filter(fecha > '2020-10-01' & fecha < '2022-12-01') %>% 
+  as_tsibble(index = fecha)
+
+data_ts <- ts(data$volumen, deltat = 1/12)
+
+plot(decompose(data_ts))
+
+```
+
+En este gráfico podemos observar 4 sub-graficos:
+
+Observed: los datos actuales
+Trend: el movimiento general hacia arriba o hacia abajo de los puntos de datos
+Seasonal: cualquier patrón mensual / anual de los puntos de los datos
+Random – parte inexplicable de los datos
+
+
+
+## Análisis exploratorio
+
+### Visualización
+
+
+### Linealidad
+
+Como se expresó anteriormente, la incorporación del componente de integración de ARIMA permite mejorar la capacidad predictiva ante series de tiempo con patrones de variación no lineales. Para evaluar si una serie de tiempo es o no estacionaliria y la linealidad de su comportamiento .
+
+Una primer forma de aproximación a evaluar la linealidad o no de una serie de timepo, es mediante la exploración visual. 
+
+```{r grafico uno}
+
+data_sem <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>%
+  select(ds = fecha, y = volumen) %>% 
+  mutate(ds = as.Date(ds)) %>% 
+  group_by(semana = floor_date(ds, unit = "week")) %>% 
+  summarise(y = mean(y, na.rm = TRUE)) %>% 
+  as_tsibble(index = semana)
+  
+autoplot(data_sem)
+```
+
+Si bien una primera aproximación visual permite ver que no hay una linealidad muy marcada y que, por el contrario, a mitad de 2022 se ve un salto importante en el comportamiento de la serie temporal, esta visualización no es estrictamente suficiente para corrobonar la linealidad o no de la serie. Como se verá más adelante, este cambio brusco puede beneficiar a Prophet en términos de su capacidad predictiva. 
+Una aproximación más estadística para este problema se puede realizar a partir de la autocorrelación. 
+
+### Autocorrelación
+
+La autocorrelación es una medida estadística que se utiliza para evaluar la relación entre los valores de una serie de tiempo y los diferentes puntos en el tiempo. Un valor de autocorrelación cercano a 1, indica una alta correlación entre los valores de la siere de tiempo (lo que puede indicar que se trata de una serie de tiempo con un patrón de variación no lineal); mietras que un valor cercano a 0 indica baja correlacióny un posible patrón lineal. 
+
+```{r autocorrelacion}
+acf(data_sem,type = "correlation", na.action = na.pass )
+```
+
+### Estacionalidad
+
+```{r}
+data_sem %>%
+  gg_season(labels = "both", na.rm = TRUE) +
+  labs(y = "Volumen", x = "Día",
+       title = "Volumen operado GD30")
+
+```
+
+
+## Predicción
+
+### ARIMA
+
+Vamos a utilizar un modelo auto arima
+
 ```{r pressure, echo=FALSE}
-plot(pressure)
+
+splits_arima <- initial_time_split(
+  data = data_dia, 
+  prop = 0.8)
+
+arima <- arima_reg() %>% 
+  set_engine('auto_arima') %>% 
+  fit(y~ds, data = training(splits_arima))
+
+arima_tabla <- modeltime_table(arima)
+arima_tabla <- arima_tabla %>%
+    modeltime_calibrate(new_data = testing(splits_arima))
+
+
+```
+
+```{r}
+arima_tabla %>% 
+                 modeltime_accuracy()
+```
+```{r}
+arima_forecast <- arima_tabla %>% 
+ modeltime_forecast(
+    new_data    = testing(splits_arima),
+    actual_data = data_dia
+ )
+
+arima_forecast %>% 
+  plot_modeltime_forecast(
+    .legend_max_width = 30, 
+    .interactive      = TRUE,
+    .conf_interval_alpha = 0.2, 
+    .line_size=0.2
+    )
+```
+
+### Prophet
+
+```{r pressure, echo=FALSE}
+
+data <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>%
+  select(fecha, volumen) %>% rename(., ds=fecha, y=volumen)
+
+# Llamamos solo al modelo
+prophet = prophet()
+# Le pasamos el dataset
+prophet=add_seasonality(m=prophet, name='monthly', period=365/12, fourier.order = 4)
+
+prophet = fit.prophet(m = prophet, data) 
+plot(prophet,fcst=predict(prophet, data)) +theme_bw()
+```
+
+```{r}
+prophet_plot_components(prophet, fcst=predict(prophet, data_dia))
+```
+
+
+#### Complejizando el modelo
+
+
+
+```{r pressure, echo=FALSE}
+eventos = data.frame(
+  holiday= 'eventos',
+  ds= ymd(c('2021-09-13','2021-11-15','2022-02-01',
+                        '2022-07-04','2022-07-28')),
+  lower_window= 0,
+  upper_window= 0)
+
+glimpse(eventos)
+```
+
+
+```{r pressure, echo=FALSE}
+prophet_full=prophet(holidays = eventos)
+# Agregamos la estacionalidad mensual
+prophet_full=add_seasonality(prophet_full, name='monthly', period=30.5, fourier.order = 4)
+# Le pasamos el dataset
+prophet_full = fit.prophet(m = prophet_full, data_dia)
+```
+```{r}
+plot(prophet_full,fcst=predict(prophet_full, data_dia)) +theme_bw()
+```
+
+## Prediccion original
+
+```{r}
+cv_base = cross_validation(prophet, initial = 366, period = 7, horizon = 15, units = 'days')
+```
+
+
+
+## Prediccion
+
+```{r}
+prophet_forecast <- prophet_reg(mode='regression') %>%
+  set_engine('prophet')%>% 
+  fit(y~ds, data = training(splits_arima))
+
+prophet_forecast
+
+
+```
+
+```{r}
+prophet_forecast %>% 
+  modeltime_table() %>% 
+  modeltime_calibrate(new_data=testing(splits_arima)) %>% 
+  modeltime_accuracy()
 ```
 
