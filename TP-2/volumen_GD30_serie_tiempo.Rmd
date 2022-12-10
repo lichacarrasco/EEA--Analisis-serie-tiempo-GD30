@@ -29,7 +29,7 @@ Los datos del volumen operado de un bono se pueden obtener de la mayoría de las
 Para el procesamiento de datos y el análisis de la serie de tiempo, se utiliza:¿n las siguientes librerías: 
 
 
-```{r librerias}
+```{r librerias, echo = FALSE}
 library(dplyr)
 library(ggplot2)
 library(prophet)
@@ -40,7 +40,8 @@ library(forecast)
 library(feasts)
 library(tidymodels)
 library(modeltime)
-
+library(fabletools)
+library(fable)
 ```
 
 ## ARIMA
@@ -53,27 +54,33 @@ ARIMA es un modelo estadístico utilizado para analizar y modelar series de tiem
 
 ## Prophet
 
+Por su parte, Prophet es un modelo desarrollado por la empresa Facebook y pertenece a la familia de los modelos aditivos generalizados (GAM). Una de las ventajas que presenta Prophet es que permite incluir en el modelado la detección de anomalías en la serie de tiempo, para controlar eventos inesperados. Prophet también permite hacer una descomposición de la serie de tiempo, considerando la estacionalidad del fenómeno en diferentes niveles de tiempo, así como obtener la tendencia general. 
+
 ## Descomposición de la serie de tiempo
+
+
 
 * Tendencia general. 
 
 * Variación estacional.
 
-* Variación cíclica.
-
 * Ruido blanco. 
 
 ```{r}
 
-data <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>% 
-  select(fecha, volumen) %>% 
-  mutate(fecha = as.Date(fecha)) %>% 
-  filter(fecha > '2020-10-01' & fecha < '2022-12-01') %>% 
-  as_tsibble(index = fecha)
+data <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>%
+  select(ds = fecha, y = volumen) %>% 
+  mutate(ds = as.Date(ds)) %>% 
+  filter(ds > '2020-10-01' & ds < '2022-12-01') %>% 
+  group_by(ds = floor_date(ds, unit = "week")) %>% 
+  summarise(y = mean(y, na.rm = TRUE)) %>% 
+  as_tsibble(index = ds)
 
-data_ts <- ts(data$volumen, deltat = 1/12)
+```
 
-plot(decompose(data_ts))
+```{r}
+
+plot(decompose(ts(data$y, frequency = 52)))
 
 ```
 
@@ -98,15 +105,7 @@ Como se expresó anteriormente, la incorporación del componente de integración
 Una primer forma de aproximación a evaluar la linealidad o no de una serie de timepo, es mediante la exploración visual. 
 
 ```{r grafico uno}
-
-data_sem <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>%
-  select(ds = fecha, y = volumen) %>% 
-  mutate(ds = as.Date(ds)) %>% 
-  group_by(semana = floor_date(ds, unit = "week")) %>% 
-  summarise(y = mean(y, na.rm = TRUE)) %>% 
-  as_tsibble(index = semana)
-  
-autoplot(data_sem)
+autoplot(data)
 ```
 
 Si bien una primera aproximación visual permite ver que no hay una linealidad muy marcada y que, por el contrario, a mitad de 2022 se ve un salto importante en el comportamiento de la serie temporal, esta visualización no es estrictamente suficiente para corrobonar la linealidad o no de la serie. Como se verá más adelante, este cambio brusco puede beneficiar a Prophet en términos de su capacidad predictiva. 
@@ -117,30 +116,36 @@ Una aproximación más estadística para este problema se puede realizar a parti
 La autocorrelación es una medida estadística que se utiliza para evaluar la relación entre los valores de una serie de tiempo y los diferentes puntos en el tiempo. Un valor de autocorrelación cercano a 1, indica una alta correlación entre los valores de la siere de tiempo (lo que puede indicar que se trata de una serie de tiempo con un patrón de variación no lineal); mietras que un valor cercano a 0 indica baja correlacióny un posible patrón lineal. 
 
 ```{r autocorrelacion}
-acf(data_sem,type = "correlation", na.action = na.pass )
+acf(data,type = "correlation", na.action = na.pass )
 ```
 
 ### Estacionalidad
 
 ```{r}
-data_sem %>%
+data %>%
   gg_season(labels = "both", na.rm = TRUE) +
   labs(y = "Volumen", x = "Día",
        title = "Volumen operado GD30")
 
 ```
 
-
 ## Predicción
 
 ### ARIMA
 
-Vamos a utilizar un modelo auto arima
+Dado que vimos la no linealidad, vamos a utilizar un modelo auto arima. Utilizaremos las observaciones diarias. 
+
+```{r}
+data <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>%
+  select(ds = fecha, y = volumen) %>% 
+  mutate(ds = as.Date(ds))
+```
+
 
 ```{r pressure, echo=FALSE}
 
 splits_arima <- initial_time_split(
-  data = data_dia, 
+  data = data, 
   prop = 0.8)
 
 arima <- arima_reg() %>% 
@@ -156,13 +161,14 @@ arima_tabla <- arima_tabla %>%
 
 ```{r}
 arima_tabla %>% 
-                 modeltime_accuracy()
+  modeltime_accuracy()
 ```
+
 ```{r}
 arima_forecast <- arima_tabla %>% 
  modeltime_forecast(
     new_data    = testing(splits_arima),
-    actual_data = data_dia
+    actual_data = data
  )
 
 arima_forecast %>% 
@@ -177,13 +183,7 @@ arima_forecast %>%
 ### Prophet
 
 ```{r pressure, echo=FALSE}
-
-data <- read.csv('C:/Users/lisan/OneDrive/Escritorio/MAESTRIA/EEA/TP-2/eea/TP-2/bono.csv') %>%
-  select(fecha, volumen) %>% rename(., ds=fecha, y=volumen)
-
-# Llamamos solo al modelo
 prophet = prophet()
-# Le pasamos el dataset
 prophet=add_seasonality(m=prophet, name='monthly', period=365/12, fourier.order = 4)
 
 prophet = fit.prophet(m = prophet, data) 
@@ -191,7 +191,12 @@ plot(prophet,fcst=predict(prophet, data)) +theme_bw()
 ```
 
 ```{r}
-prophet_plot_components(prophet, fcst=predict(prophet, data_dia))
+prophet_plot_components(prophet, fcst=predict(prophet, data))
+```
+
+
+```{r}
+cv_base = cross_validation(prophet, initial = 45, period = 7, horizon = 15, units = 'days')
 ```
 
 
@@ -213,21 +218,13 @@ glimpse(eventos)
 
 ```{r pressure, echo=FALSE}
 prophet_full=prophet(holidays = eventos)
-# Agregamos la estacionalidad mensual
+
 prophet_full=add_seasonality(prophet_full, name='monthly', period=30.5, fourier.order = 4)
-# Le pasamos el dataset
 prophet_full = fit.prophet(m = prophet_full, data_dia)
 ```
 ```{r}
 plot(prophet_full,fcst=predict(prophet_full, data_dia)) +theme_bw()
 ```
-
-## Prediccion original
-
-```{r}
-cv_base = cross_validation(prophet, initial = 366, period = 7, horizon = 15, units = 'days')
-```
-
 
 
 ## Prediccion
